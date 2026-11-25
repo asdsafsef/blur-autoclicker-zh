@@ -1,0 +1,100 @@
+name: Build Chinese Blur Auto Clicker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout patch repo
+        uses: actions/checkout@v4
+        with:
+          path: patch
+
+      - name: Checkout upstream v3.10.2
+        uses: actions/checkout@v4
+        with:
+          repository: Blur009/Blur-AutoClicker
+          ref: v3.10.2
+          path: src
+          fetch-depth: 0
+
+      - name: Apply Chinese patches
+        shell: pwsh
+        run: |
+          Copy-Item -Force patch/patches/src/zh.ts src/src/zh.ts
+          Copy-Item -Force patch/patches/src/main.tsx src/src/main.tsx
+          Copy-Item -Force patch/patches/src/theme.tsx src/src/theme.tsx
+          Copy-Item -Force patch/patches/src-tauri/tauri.conf.json src/src-tauri/tauri.conf.json
+
+          $html = @{
+            'index.html'      = @{ lang = 'zh-CN'; title = 'Blur 自动连点器' }
+            'theme.html'      = @{ lang = 'zh-CN'; title = '主题自定义' }
+            'overlay.html'    = @{ lang = 'zh-CN'; title = '浮层' }
+            'indicator.html'  = @{ lang = 'zh-CN'; title = '点击指示器' }
+          }
+          foreach ($f in $html.Keys) {
+            $p = Join-Path src $f
+            $t = Get-Content -Raw -LiteralPath $p
+            $t = $t -replace '<html lang="en">', ('<html lang="' + $html[$f].lang + '">')
+            $t = $t -replace '<title>[^<]*</title>', ('<title>' + $html[$f].title + '</title>')
+            Set-Content -NoNewline -LiteralPath $p -Value $t
+          }
+          Write-Output "Patches applied."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install npm dependencies
+        working-directory: src
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend
+        working-directory: src
+        run: npm run frontend:build
+
+      - name: Build Tauri binary
+        working-directory: src
+        run: npx tauri build
+
+      - name: Stage portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $exe = Get-ChildItem -Path src/src-tauri/target/release -Filter '*.exe' -File |
+            Where-Object { $_.Name -notlike '*build-script*' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $exe) { throw 'built exe not found' }
+          Write-Output "EXE: $($exe.FullName) SIZE: $($exe.Length)"
+          Copy-Item -Force $exe.FullName artifacts/
+          Compress-Archive -Force -Path $exe.FullName -DestinationPath 'artifacts/BlurAutoClicker-v3.10.2-zh-portable.zip'
+
+          $anyBundle = Get-ChildItem -Path src/src-tauri/target/release/bundle -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in @('.exe','.msi','.zip') }
+          if ($anyBundle) { $anyBundle | ForEach-Object { Copy-Item -Force $_.FullName artifacts/ } }
+          Get-ChildItem artifacts | Select-Object Name,Length
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zh-v3.10.2
+          name: Blur Auto Clicker v3.10.2 中文版
+          body: |
+            基于上游 GPL-3.0 项目 Blur009/Blur-AutoClicker v3.10.2 的中文界面修改版。
+            仅汉化界面显示文案，不改动点击逻辑、设置键名或进程通信。
+            下载 portable zip，解压后运行 exe 即可。
+          files: artifacts/*
+          generate_release_notes: false
