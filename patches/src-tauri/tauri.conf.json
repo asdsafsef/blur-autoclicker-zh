@@ -34,7 +34,6 @@
   },
   "bundle": {
     "active": false,
-    "targets": "none",
     "createUpdaterArtifacts": false,
     "publisher": "Blur009 / 中文修改版",
     "copyright": "Copyright (c) Blur009; 中文界面修改版",
